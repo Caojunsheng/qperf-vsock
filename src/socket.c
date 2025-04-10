@@ -38,6 +38,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
+#include <linux/vm_sockets.h>
+#include <stdio.h>
 #include "qperf.h"
 
 
@@ -54,10 +57,11 @@ typedef enum {
     K_SCTP,
     K_SDP,
     K_TCP,
+    K_VSOCK,
     K_UDP,
 } KIND;
 
-char *Kinds[] ={ "SCTP", "SDP", "TCP", "UDP", };
+char *Kinds[] ={ "SCTP", "SDP", "TCP", "VSOCK", "UDP", };
 
 
 /*
@@ -212,6 +216,49 @@ void
 run_server_tcp_lat(void)
 {
     stream_server_lat(K_TCP);
+}
+
+/*
+ * Measure VSOCK bandwidth (client side).
+ */
+void
+run_client_vsock_bw(void)
+{
+    par_use(L_ACCESS_RECV);
+    par_use(R_ACCESS_RECV);
+    ip_parameters(64*1024);
+    stream_client_bw(K_VSOCK);
+}
+
+
+/*
+ * Measure VSOCK bandwidth (server side).
+ */
+void
+run_server_vsock_bw(void)
+{
+    stream_server_bw(K_VSOCK);
+}
+
+
+/*
+ * Measure VSOCK latency (client side).
+ */
+void
+run_client_vsock_lat(void)
+{
+    ip_parameters(1);
+    stream_client_lat(K_VSOCK);
+}
+
+
+/*
+ * Measure VSOCK latency (server side).
+ */
+void
+run_server_vsock_lat(void)
+{
+    stream_server_lat(K_VSOCK);
 }
 
 
@@ -583,6 +630,7 @@ client_init(int *fd, KIND kind)
 {
     uint32_t rport;
     AI *ai, *ailist;
+    struct sockaddr_vm vsock_addr;
 
     client_send_request();
     recv_mesg(&rport, sizeof(rport), "port");
@@ -591,6 +639,15 @@ client_init(int *fd, KIND kind)
     for (ai = ailist; ai; ai = ai->ai_next) {
         if (!ai->ai_family)
             continue;
+        if (VsockMode) {
+            vsock_addr.svm_family = AF_VSOCK;
+            vsock_addr.svm_cid = ServerCid;
+            vsock_addr.svm_port = rport;
+            ai->ai_family = AF_VSOCK;
+            ai->ai_addr = (struct sockaddr*)&vsock_addr;
+            ai->ai_protocol = 0;
+        }
+        
         *fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
 	setsockopt_one(*fd, SO_REUSEADDR);
         if (connect(*fd, ai->ai_addr, ai->ai_addrlen) == SUCCESS0)
@@ -617,11 +674,24 @@ stream_server_init(int *fd, KIND kind)
     uint32_t port;
     AI *ai;
     int listenFD = -1;
+    struct sockaddr_vm vsock_addr;
 
-    AI *ailist = getaddrinfo_kind(1, kind,  Req.port);
+    AI hints ={
+        .ai_flags    = AI_PASSIVE | AI_NUMERICSERV,
+        .ai_family   = AF_INET6,
+        .ai_socktype = SOCK_STREAM
+    };
+    int listen_port = get_random_port();
+    AI *ailist = getaddrinfo_port(0, listen_port, &hints);
     for (ai = ailist; ai; ai = ai->ai_next) {
-        if (!ai->ai_family)
-            continue;
+        if (VsockMode) {
+            vsock_addr.svm_family = AF_VSOCK;
+            vsock_addr.svm_cid = VMADDR_CID_ANY;
+            vsock_addr.svm_port = listen_port;
+            ai->ai_family = AF_VSOCK;
+            ai->ai_addr = (struct sockaddr*)&vsock_addr;
+            ai->ai_protocol = 0;
+        }
         listenFD = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (listenFD < 0)
             continue;
@@ -659,11 +729,22 @@ datagram_server_init(int *fd, KIND kind)
     uint32_t port;
     AI *ai;
     int sockfd = -1;
+    struct sockaddr_vm vsock_addr;
 
     AI *ailist = getaddrinfo_kind(1, kind, Req.port);
     for (ai = ailist; ai; ai = ai->ai_next) {
         if (!ai->ai_family)
             continue;
+        if (VsockMode) {
+            vsock_addr.svm_family = AF_VSOCK;
+            vsock_addr.svm_cid = VMADDR_CID_ANY;
+            if (Req.port == 0){
+                vsock_addr.svm_port = get_random_port();
+            }
+            ai->ai_family = AF_VSOCK;
+            ai->ai_addr = (struct sockaddr*)&vsock_addr;
+            ai->ai_protocol = 0;
+        }
         sockfd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (sockfd < 0)
             continue;
@@ -682,6 +763,25 @@ datagram_server_init(int *fd, KIND kind)
     encode_uint32(&port, port);
     send_mesg(&port, sizeof(port), "port");
     *fd = sockfd;
+}
+
+#define PORT_START 1024
+#define PORT_END   65535
+
+int is_port_available(int port) {
+    char cmd[128];
+    sprintf(cmd, "netstat -an | grep ':%d ' > /dev/null", port);
+    return system(cmd); // 被占用返回0，否则返回256（网页1）
+}
+
+int get_random_port() {
+    srand(time(NULL));
+    int port;
+
+    do {
+        port = PORT_START + rand() % (PORT_END - PORT_START + 1);
+    } while (is_port_available(port) == 0);
+    return port;
 }
 
 
@@ -754,6 +854,11 @@ get_socket_port(int fd, uint32_t *port)
 
     if (getsockname(fd, (SA *)&sa, &salen) < 0)
         error(SYS, "getsockname failed");
+    if (sa.ss_family == AF_VSOCK) {
+        struct sockaddr_vm *svm = (struct sockaddr_vm *)&sa;
+        *port = svm->svm_port;
+        return;
+    }
     if (getnameinfo((SA *)&sa, salen, 0, 0, p, sizeof(p), NI_NUMERICSERV) < 0)
         error(SYS, "getnameinfo failed");
     *port = atoi(p);
