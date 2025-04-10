@@ -51,6 +51,8 @@ Categories -RDMA
         sdp_lat
         tcp_bw
         tcp_lat
+        vsock_bw
+        vsock_lat
         udp_bw
         udp_lat
 Categories +RDMA
@@ -83,6 +85,8 @@ Categories +RDMA
         sdp_lat
         tcp_bw
         tcp_lat
+        vsock_bw
+        vsock_lat
         uc_bi_bw
         uc_bw
         uc_lat
@@ -106,6 +110,8 @@ Examples
     hostname of myserver.
         * To run a TCP bandwidth and latency test:
             qperf myserver tcp_bw tcp_lat
+        * To run a VSOCK bandwidth and latency test:
+            qperf myserver vsock_bw vsock_lat
         * To run a SDP bandwidth test for 10 seconds:
             qperf myserver -t 10 sdp_bw
         * To run a UDP latency test and then cause the server to terminate:
@@ -119,6 +125,7 @@ Examples
 Opts
     --access_recv OnOff (-ar)           Turn on/off accessing received data
       -ar1                              Cause received data to be accessed
+    --vsock                             Use vsock communicate
     --alt_port Port (-ap)               Set alternate path port
       --loc_alt_port Port (-lap)        Set local alternate path port
       --rem_alt_port Port (-rap)        Set remote alternate path port
@@ -188,6 +195,8 @@ Options
           some applications.
       -ar1
           Cause received data to be accessed.
+    --vsock
+          Use vsock communicate.
     --alt_port Port (-ap)
           Set alternate path port. This enables automatic path failover.
       --loc_alt_port Port (-lap)
@@ -367,6 +376,8 @@ Tests -RDMA
         sdp_lat                 SDP one way latency
         tcp_bw                  TCP streaming one way bandwidth
         tcp_lat                 TCP one way latency
+        vsock_bw                VSOCK streaming one way bandwidth
+        vsock_lat               VSOCK one way latency
         udp_bw                  UDP streaming one way bandwidth
         udp_lat                 UDP one way latency
 Tests +RDMA
@@ -382,6 +393,8 @@ Tests +RDMA
         sdp_lat                 SDP one way latency
         tcp_bw                  TCP streaming one way bandwidth
         tcp_lat                 TCP one way latency
+        vsock_bw                VSOCK streaming one way bandwidth
+        vsock_lat               VSOCK one way latency
         udp_bw                  UDP streaming one way bandwidth
         udp_lat                 UDP one way latency
     RDMA Send/Receive
@@ -554,6 +567,38 @@ tcp_lat
     Description
         A ping pong latency test where the server and client exchange messages
         repeatedly using TCP sockets.
+vsock_bw
+    Purpose
+        VSOCK streaming one way bandwidth
+    Common Options
+        --access_recv OnOff (-ar)   Access received data
+        --cpu_affinity PN (-ca)     Set processor affinity
+        --msg_size Size (-m)        Set message size
+        --sock_buf_size Size (-sb)  Set socket buffer size
+        --time (-t)                 Set test duration
+    Other Options
+        --listen_port, --ip_port, --timeout
+    Display Options
+        --precision, --unify_nodes, --unify_units, --use_bits_per_sec,
+        --verbose
+    Description
+        The client repeatedly sends messages to the server while the server
+        notes how many were received.
+vsock_lat
+    Purpose
+        VSOCK one way latency
+    Common Options
+        --cpu_affinity PN (-ca)     Set processor affinity
+        --msg_size Size (-m)        Set message size
+        --sock_buf_size Size (-sb)  Set socket buffer size
+        --time (-t)                 Set test duration
+    Other Options
+        --listen_port, --ip_port, --timeout
+    Display Options
+        --precision, --unify_nodes, --unify_units, --verbose
+    Description
+        A ping pong latency test where the server and client exchange messages
+        repeatedly using VSOCK sockets.
 udp_bw
     Purpose
         UDP streaming one way bandwidth
