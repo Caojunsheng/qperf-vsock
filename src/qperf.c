@@ -51,6 +51,7 @@
 #include <sys/times.h>
 #include <sys/select.h>
 #include <sys/utsname.h>
+#include <linux/vm_sockets.h>
 #include "qperf.h"
 
 
@@ -277,10 +278,12 @@ REQ          Req;
 STAT         LStat;
 char        *TestName;
 char        *ServerName;
+int          ServerCid;
 SS           ServerAddr;
 int          ServerAddrLen;
 int          RemoteFD;
 int          Debug;
+int          VsockMode;
 volatile int Finished;
 
 
@@ -425,6 +428,7 @@ OPTION Options[] ={
     { "--access_recv",        "int",   L_ACCESS_RECV,   R_ACCESS_RECV   },
     {   "-ar",                "int",   L_ACCESS_RECV,   R_ACCESS_RECV   },
     {   "-ar1",               "set1",  L_ACCESS_RECV,   R_ACCESS_RECV   },
+    { "--vsock",              "Svsock",                                  },
     { "--alt_port",           "int",   L_ALT_PORT,      R_ALT_PORT      },
     {   "-ap",                "int",   L_ALT_PORT,      R_ALT_PORT      },
     {  "--loc_alt_port",      "int",   L_ALT_PORT,                      },
@@ -564,6 +568,8 @@ TEST Tests[] ={
     test(sdp_lat),
     test(tcp_bw),
     test(tcp_lat),
+    test(vsock_bw),
+    test(vsock_lat),
     test(udp_bw),
     test(udp_lat),
 #ifdef RDMA
@@ -740,9 +746,10 @@ do_args(char *args[])
             do_option(option, &args);
         } else {
             isClient = 1;
-            if (!ServerName)
+            if (!ServerName){
                 ServerName = arg;
-            else {
+                ServerCid = atoi(ServerName);
+            } else {
                 TEST *test = find_test(arg);
 
                 if (!test)
@@ -880,6 +887,9 @@ do_option(OPTION *option, char ***argvp)
         setp_u32(option->name, option->arg2, v);
     } else if (streq(t, "loop")) {
         parse_loop(argvp);
+    } else if (streq(t, "vsock")) {
+        VsockMode = 1;
+        *argvp += 1;
     } else if (streq(t, "lp")) {
         ListenPort = arg_long(argvp);
     } else if (streq(t, "precision")) {
@@ -1418,12 +1428,21 @@ server_listen(void)
     AI *ai;
     AI hints ={
         .ai_flags    = AI_PASSIVE | AI_NUMERICSERV,
-	.ai_family   = AF_INET6,
+        .ai_family   = AF_INET6,
         .ai_socktype = SOCK_STREAM
     };
+    struct sockaddr_vm vsock_addr;
     AI *ailist = getaddrinfo_port(0, ListenPort, &hints);
-
     for (ai = ailist; ai; ai = ai->ai_next) {
+        if (VsockMode) {
+            vsock_addr.svm_family = AF_VSOCK;
+            vsock_addr.svm_cid = VMADDR_CID_ANY;
+            vsock_addr.svm_port = ListenPort;
+            ai->ai_family = AF_VSOCK;
+            ai->ai_addr = (struct sockaddr*)&vsock_addr;
+            ai->ai_protocol = 0;
+        }
+        printf("server_listen socket ai_family=%d,ai_socktype=%d, ai_protocol=%d\n", ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         ListenFD = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (ListenFD < 0)
             continue;
@@ -1509,6 +1528,7 @@ client_send_request(void)
         .ai_socktype = SOCK_STREAM
     };
     AI *ailist = getaddrinfo_port(ServerName, ListenPort, &hints);
+    struct sockaddr_vm *vsock_addr = malloc(sizeof(struct sockaddr_vm));
 
     RemoteFD = -1;
     if (ServerWait)
@@ -1517,10 +1537,21 @@ client_send_request(void)
         for (a = ailist; a; a = a->ai_next) {
             if (Finished)
                 break;
+            if (VsockMode) {
+                vsock_addr->svm_family = AF_VSOCK;
+                vsock_addr->svm_cid = ServerCid;
+                vsock_addr->svm_port = ListenPort;
+                a->ai_family = AF_VSOCK;
+                a->ai_addr = (struct sockaddr*)vsock_addr;
+                a->ai_protocol = 0;
+                a->ai_addrlen = sizeof(struct sockaddr_vm);
+            }
             RemoteFD = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
             if (RemoteFD < 0)
                 continue;
+
             if (connect(RemoteFD, a->ai_addr, a->ai_addrlen) != SUCCESS0) {
+                printf("client_send_request connect fail,vsock_addr.svm_cid=%d, vsock_addr.svm_port=%d\n", vsock_addr->svm_cid, vsock_addr->svm_port);
                 remotefd_close();
                 continue;
             }
